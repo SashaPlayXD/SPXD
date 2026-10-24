@@ -13,10 +13,10 @@ index da85f99..6de517f 100644
      </device>
  </driconf>
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index b347a33..25ed449 100644
+index 6fdee49..24502fe 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -9297,6 +9297,38 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
+@@ -9348,6 +9348,60 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
  }
  TU_GENX(tu_CmdDrawMultiEXT);
  
@@ -52,16 +52,39 @@ index b347a33..25ed449 100644
 +   return true;
 +}
 +
++/* Synchronization emitted after a chunk of a split indexed draw.
++ * TU_SPLIT_SYNC selects the packet (wfi = CP_WAIT_FOR_IDLE, the default and
++ * what Rutabaga does; me = CP_WAIT_FOR_ME; none = nothing) and
++ * TU_SPLIT_SYNC_EVERY emits it only after every Nth chunk. The last chunk of
++ * a draw always gets it when TU_SPLIT_SYNC_LAST is set (default on).
++ */
++static void
++tu_split_indexed_sync(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
++                      uint32_t chunk_idx, bool last)
++{
++   const struct tu_device *dev = cmd->device;
++   if (dev->split_sync_mode == TU_SPLIT_SYNC_NONE)
++      return;
++   if (!(chunk_idx % dev->split_sync_every == 0 ||
++         (last && dev->split_sync_last)))
++      return;
++   if (dev->split_sync_mode == TU_SPLIT_SYNC_ME)
++      tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
++   else
++      tu_cs_emit_pkt7(cs, CP_WAIT_FOR_IDLE, 0);
++}
++
  template <chip CHIP>
  VKAPI_ATTR void VKAPI_CALL
  tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
-@@ -9313,6 +9345,24 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -9364,6 +9418,25 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
  
     tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
  
 +   if (CHIP >= A8XX && unlikely(cmd->device->split_indexed_draws) &&
 +       tu_can_split_indexed_draw(cmd, indexCount, instanceCount)) {
 +      const uint32_t chunk = cmd->device->split_indexed_chunk;
++      uint32_t chunks = 0;
 +      for (uint32_t done = 0; done < indexCount; done += chunk) {
 +         const uint32_t count = MIN2(chunk, indexCount - done);
 +         tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
@@ -71,7 +94,7 @@ index b347a33..25ed449 100644
 +         tu_cs_emit(cs, firstIndex + done);
 +         tu_cs_emit_qw(cs, cmd->state.index_va);
 +         tu_cs_emit(cs, cmd->state.max_index_count);
-+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_IDLE, 0);
++         tu_split_indexed_sync(cmd, cs, ++chunks, done + count >= indexCount);
 +      }
 +      trace_end_draw(&cmd->rp_trace, cs);
 +      return;
@@ -81,10 +104,10 @@ index b347a33..25ed449 100644
     tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
     tu_cs_emit(cs, instanceCount);
 diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
-index fd61f3f..a699279 100644
+index 57f33fb..fefabfe 100644
 --- a/src/freedreno/vulkan/tu_device.cc
 +++ b/src/freedreno/vulkan/tu_device.cc
-@@ -2905,6 +2905,26 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -2994,6 +2994,42 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
  
     device->instance = physical_device->instance;
     device->physical_device = physical_device;
@@ -104,24 +127,54 @@ index fd61f3f..a699279 100644
 +      chunk -= chunk % 3; /* keep whole triangles */
 +      device->split_indexed_draws = split && physical_device->info->chip >= 8;
 +      device->split_indexed_chunk = (uint32_t) chunk;
++
++      const char *sync = os_get_option("TU_SPLIT_SYNC");
++      device->split_sync_mode = TU_SPLIT_SYNC_WFI;
++      if (sync && !strcmp(sync, "me"))
++         device->split_sync_mode = TU_SPLIT_SYNC_ME;
++      else if (sync && !strcmp(sync, "none"))
++         device->split_sync_mode = TU_SPLIT_SYNC_NONE;
++      int64_t every = debug_get_num_option("TU_SPLIT_SYNC_EVERY", 1);
++      device->split_sync_every = (uint32_t) CLAMP(every, 1, 64);
++      device->split_sync_last = debug_get_bool_option("TU_SPLIT_SYNC_LAST", true);
++
 +      if (device->split_indexed_draws)
-+         mesa_logi("Indexed draw split: enabled, chunk=%u, application default=%s",
-+                   device->split_indexed_chunk, app_default ? "true" : "false");
++         mesa_logi("Indexed draw split: enabled, chunk=%u, sync=%s every %u%s, application default=%s",
++                   device->split_indexed_chunk,
++                   device->split_sync_mode == TU_SPLIT_SYNC_ME ? "me" :
++                   device->split_sync_mode == TU_SPLIT_SYNC_NONE ? "none" : "wfi",
++                   device->split_sync_every,
++                   device->split_sync_last ? " + last" : "",
++                   app_default ? "true" : "false");
 +   }
     device->device_idx = device->physical_device->device_count++;
  
     result = tu_drm_device_init(device);
 diff --git a/src/freedreno/vulkan/tu_device.h b/src/freedreno/vulkan/tu_device.h
-index cf48f0d..7c5cb35 100644
+index 3e1211a..ee265da 100644
 --- a/src/freedreno/vulkan/tu_device.h
 +++ b/src/freedreno/vulkan/tu_device.h
-@@ -314,6 +314,10 @@ struct tu_device
+@@ -309,11 +309,24 @@ struct tu_pvtmem_bo {
+ 
+ struct tu_virtio_device;
+ 
++enum tu_split_sync_mode {
++   TU_SPLIT_SYNC_WFI = 0,
++   TU_SPLIT_SYNC_ME,
++   TU_SPLIT_SYNC_NONE,
++};
++
+ struct tu_device
+ {
     struct vk_device vk;
     struct tu_instance *instance;
  
 +   /* A8xx indexed-draw hang workaround (see tu_CmdDrawIndexed). */
 +   bool split_indexed_draws;
 +   uint32_t split_indexed_chunk;
++   uint8_t split_sync_mode; /* enum tu_split_sync_mode */
++   bool split_sync_last;
++   uint32_t split_sync_every;
 +
     struct tu_queue *queues[TU_MAX_QUEUE_FAMILIES];
     int queue_count[TU_MAX_QUEUE_FAMILIES];

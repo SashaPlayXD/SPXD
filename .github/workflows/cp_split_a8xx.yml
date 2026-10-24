@@ -5,7 +5,7 @@ on:
     inputs:
       mesa_commit:
         description: "Mesa commit to build"
-        default: "19a135296672f24ec1699ada244d5b80ced371da"
+        default: "c515ec0fe77da9f42f390e442379f2d0629d908c"
 
 permissions:
   contents: write
@@ -33,7 +33,7 @@ jobs:
           export EXTRA_SCRIPT="patches/a8xx_shared_mem.py"
           export CP_PATCH="patches/cp_split_indexed.patch"
           export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
-          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws; TU_DIAGNOSTIC_SPLIT_INDEXED / TU_DIAGNOSTIC_INDEXED_CHUNK). Experimental."
+          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST. Experimental."
           ./build_turnip.sh
 
       - name: Upload driver
@@ -49,7 +49,7 @@ jobs:
           Z=$(ls turnip_workdir/mesa-turnip-*.zip | head -1)
           rm -rf verify && mkdir verify && unzip -q "$Z" -d verify
           strings -n 6 verify/libvulkan_freedreno.so > verify/strings.txt
-          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_DIAGNOSTIC_SPLIT_INDEXED TU_DIAGNOSTIC_INDEXED_CHUNK "Indexed draw split"; do
+          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_DIAGNOSTIC_SPLIT_INDEXED TU_DIAGNOSTIC_INDEXED_CHUNK TU_SPLIT_SYNC TU_SPLIT_SYNC_EVERY "Indexed draw split"; do
             grep -q "$s" verify/strings.txt || { echo "::error::missing '$s' in driver"; exit 1; }
             echo "found: $s"
           done
