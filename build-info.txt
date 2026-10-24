@@ -1,0 +1,16 @@
+run: 2
+mesa: 19a135296672f24ec1699ada244d5b80ced371da
+Fri Oct 23 21:28:03 2026 -0700 venus: avoid casting vulkan handles
+Mesa 27.0.0-devel (git-19a1352966)
+e1c1690cd6a64be6d4aa723e19bd3e9fc305bc47cbf1d83d3be4487b7b8dcebd  turnip_workdir/mesa-turnip-main-V2.zip
+{
+  "schemaVersion": 1,
+  "name": "Turnip v27 A8xx CP-split r2",
+  "description": "Banner's A8xx Turnip (Mesa 19a1352966 + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws; TU_DIAGNOSTIC_SPLIT_INDEXED / TU_DIAGNOSTIC_INDEXED_CHUNK). Experimental.",
+  "author": "The412Banner",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan 1.4.363",
+  "minApi": 28,
+  "libraryName": "libvulkan_freedreno.so"
+}
