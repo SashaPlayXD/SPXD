@@ -1,4 +1,4 @@
-name: Turnip A8xx + Cyberpunk split (custom)
+name: SPXD Turnip A8xx (Cyberpunk fix)
 
 on:
   workflow_dispatch:
@@ -32,8 +32,8 @@ jobs:
           export EXTRA_PATCH="patches/a8xx_gen8.patch"
           export EXTRA_SCRIPT="patches/a8xx_shared_mem.py"
           export CP_PATCH="patches/cp_split_indexed.patch"
-          export META_NAME="Turnip v27 A8xx CP-split r${{ github.run_number }}"
-          export META_DESC="Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws; TU_DIAGNOSTIC_SPLIT_INDEXED / TU_DIAGNOSTIC_INDEXED_CHUNK). Experimental."
+          export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
+          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws; TU_DIAGNOSTIC_SPLIT_INDEXED / TU_DIAGNOSTIC_INDEXED_CHUNK). Experimental."
           ./build_turnip.sh
 
       - name: Upload driver
