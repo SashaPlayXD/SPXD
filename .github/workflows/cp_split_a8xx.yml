@@ -1,0 +1,41 @@
+name: Turnip A8xx + Cyberpunk split (custom)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mesa_commit:
+        description: "Mesa commit to build"
+        default: "19a135296672f24ec1699ada244d5b80ced371da"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools curl zip patch ccache
+          pip3 install --break-system-packages meson mako pyyaml
+
+      - name: Build
+        run: |
+          chmod +x build_turnip.sh
+          export BUILD_VERSION="${{ github.run_number }}"
+          export MESA_COMMIT="${{ inputs.mesa_commit }}"
+          export EXTRA_PATCH="patches/a8xx_gen8.patch"
+          export EXTRA_SCRIPT="patches/a8xx_shared_mem.py"
+          export CP_PATCH="patches/cp_split_indexed.patch"
+          export META_NAME="Turnip v27 A8xx CP-split r${{ github.run_number }}"
+          export META_DESC="Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws; TU_DIAGNOSTIC_SPLIT_INDEXED / TU_DIAGNOSTIC_INDEXED_CHUNK). Experimental."
+          ./build_turnip.sh
+
+      - name: Upload driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-a8xx-cp-split-r${{ github.run_number }}
+          path: turnip_workdir/mesa-turnip-*.zip
+          if-no-files-found: error

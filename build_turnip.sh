@@ -98,6 +98,13 @@ build_lib_for_android(){
 		done
 	fi
 
+	# Cyberpunk 2077 A8xx hang workaround (split large indexed draws + CP_WAIT_FOR_IDLE)
+	if [ -n "$CP_PATCH" ]; then
+		echo "Applying $CP_PATCH"
+		git apply "../../$CP_PATCH" || { echo -e "${red}$CP_PATCH did not apply, aborting!${nocolor}"; exit 1; }
+		grep -q "tu_can_split_indexed_draw" src/freedreno/vulkan/tu_cmd_buffer.cc || { echo -e "${red}$CP_PATCH not in tree, aborting!${nocolor}"; exit 1; }
+	fi
+
 	# Preventive fixes for NDK r29 compilation
 	sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
 	sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true

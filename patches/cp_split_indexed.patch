@@ -1,0 +1,148 @@
+diff --git a/src/freedreno/vulkan/00-turnip-defaults.conf b/src/freedreno/vulkan/00-turnip-defaults.conf
+index da85f99..6de517f 100644
+--- a/src/freedreno/vulkan/00-turnip-defaults.conf
++++ b/src/freedreno/vulkan/00-turnip-defaults.conf
+@@ -156,5 +156,9 @@
+         <application name="Sweet Surrender" application_name_match="Sweet Surrender VR.exe">
+             <option name="tu_autotune_algorithm" value="prefer_gmem" />
+         </application>
++        <!-- GPU hangs on A8xx with large indexed draws (freezes / "squares") -->
++        <application name="Cyberpunk 2077" executable="Cyberpunk2077.exe">
++            <option name="tu_split_indexed_draws" value="true" />
++        </application>
+     </device>
+ </driconf>
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index b347a33..25ed449 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -9297,6 +9297,38 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
+ }
+ TU_GENX(tu_CmdDrawMultiEXT);
+ 
++/* Splitting an indexed draw is only invisible to the application when the
++ * draw is a plain, non-instanced triangle list without primitive restart,
++ * tessellation, geometry shaders or transform feedback, and when the fragment
++ * shader doesn't read gl_PrimitiveID (it restarts from 0 in every chunk).
++ */
++static bool
++tu_can_split_indexed_draw(struct tu_cmd_buffer *cmd, uint32_t indexCount,
++                          uint32_t instanceCount)
++{
++   if (instanceCount != 1 || indexCount <= cmd->device->split_indexed_chunk)
++      return false;
++
++   const struct vk_dynamic_graphics_state *ds = &cmd->vk.dynamic_graphics_state;
++   if (ds->ia.primitive_topology != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
++       ds->ia.primitive_restart_enable)
++      return false;
++
++   const struct tu_shader *tcs = cmd->state.shaders[MESA_SHADER_TESS_CTRL];
++   const struct tu_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
++   const struct tu_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
++   const struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
++
++   if ((tcs && tcs->variant) || (gs && gs->variant))
++      return false;
++   if (!vs || !vs->variant || vs->variant->stream_output.num_outputs)
++      return false;
++   if (fs && fs->variant && fs->variant->reads_primid)
++      return false;
++
++   return true;
++}
++
+ template <chip CHIP>
+ VKAPI_ATTR void VKAPI_CALL
+ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -9313,6 +9345,24 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+ 
+    tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
+ 
++   if (CHIP >= A8XX && unlikely(cmd->device->split_indexed_draws) &&
++       tu_can_split_indexed_draw(cmd, indexCount, instanceCount)) {
++      const uint32_t chunk = cmd->device->split_indexed_chunk;
++      for (uint32_t done = 0; done < indexCount; done += chunk) {
++         const uint32_t count = MIN2(chunk, indexCount - done);
++         tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
++         tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
++         tu_cs_emit(cs, instanceCount);
++         tu_cs_emit(cs, count);
++         tu_cs_emit(cs, firstIndex + done);
++         tu_cs_emit_qw(cs, cmd->state.index_va);
++         tu_cs_emit(cs, cmd->state.max_index_count);
++         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_IDLE, 0);
++      }
++      trace_end_draw(&cmd->rp_trace, cs);
++      return;
++   }
++
+    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
+    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
+    tu_cs_emit(cs, instanceCount);
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index fd61f3f..a699279 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -2905,6 +2905,26 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+ 
+    device->instance = physical_device->instance;
+    device->physical_device = physical_device;
++
++   {
++      /* A8xx indexed-draw hang workaround. Enabled per-app through driconf
++       * (tu_split_indexed_draws) and overridable through the environment.
++       */
++      const bool app_default =
++         physical_device->instance->drirc.misc.split_indexed_draws;
++      bool split = debug_get_bool_option("TU_DIAGNOSTIC_SPLIT_INDEXED", app_default);
++      split = debug_get_bool_option("TU_SPLIT_INDEXED", split);
++      int64_t chunk = app_default ? 6144 : 1536;
++      chunk = debug_get_num_option("TU_DIAGNOSTIC_INDEXED_CHUNK", chunk);
++      chunk = debug_get_num_option("TU_SPLIT_INDEXED_CHUNK", chunk);
++      chunk = CLAMP(chunk, 3, 49152);
++      chunk -= chunk % 3; /* keep whole triangles */
++      device->split_indexed_draws = split && physical_device->info->chip >= 8;
++      device->split_indexed_chunk = (uint32_t) chunk;
++      if (device->split_indexed_draws)
++         mesa_logi("Indexed draw split: enabled, chunk=%u, application default=%s",
++                   device->split_indexed_chunk, app_default ? "true" : "false");
++   }
+    device->device_idx = device->physical_device->device_count++;
+ 
+    result = tu_drm_device_init(device);
+diff --git a/src/freedreno/vulkan/tu_device.h b/src/freedreno/vulkan/tu_device.h
+index cf48f0d..7c5cb35 100644
+--- a/src/freedreno/vulkan/tu_device.h
++++ b/src/freedreno/vulkan/tu_device.h
+@@ -314,6 +314,10 @@ struct tu_device
+    struct vk_device vk;
+    struct tu_instance *instance;
+ 
++   /* A8xx indexed-draw hang workaround (see tu_CmdDrawIndexed). */
++   bool split_indexed_draws;
++   uint32_t split_indexed_chunk;
++
+    struct tu_queue *queues[TU_MAX_QUEUE_FAMILIES];
+    int queue_count[TU_MAX_QUEUE_FAMILIES];
+ 
+diff --git a/src/freedreno/vulkan/tu_drirc_gen.py b/src/freedreno/vulkan/tu_drirc_gen.py
+index b46cc2f..73782e0 100644
+--- a/src/freedreno/vulkan/tu_drirc_gen.py
++++ b/src/freedreno/vulkan/tu_drirc_gen.py
+@@ -123,6 +123,15 @@ def declare_options():
+           "Emulate SSBOs to allow a higher limit for elements that is in line with what some D3D12 games expect",
+           c_name="enable_ssbo_emulation"),
+ 
++        # A8xx (e.g. Adreno 830) can hang on very large indexed triangle-list
++        # draws in some D3D12 titles (Cyberpunk 2077). Splitting such draws into
++        # chunks separated by CP_WAIT_FOR_IDLE avoids the hang. The chunk size and
++        # the switch itself can be overridden with TU_SPLIT_INDEXED_CHUNK and
++        # TU_SPLIT_INDEXED (TU_DIAGNOSTIC_* names are accepted too).
++        B("tu_split_indexed_draws", False,
++          "Split large indexed triangle-list draws into chunks separated by CP_WAIT_FOR_IDLE on A8xx to work around GPU hangs",
++          c_name="split_indexed_draws"),
++
+         B("tu_disable_conservative_fdm_binning", False,
+           "Don't enable conservative rasterization during binning of a renderpass with FDM, for non-identity FDM tiles may result in tiny see-through gaps in the geometry in places with dense geometry. Improves performance up to 4% on A7XX.",
+           c_name="disable_conservative_fdm_binning"),
