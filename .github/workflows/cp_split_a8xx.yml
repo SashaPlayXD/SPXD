@@ -33,6 +33,7 @@ jobs:
           export EXTRA_SCRIPT="patches/a8xx_shared_mem.py"
           export CP_PATCH="patches/cp_split_indexed.patch"
           export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
+          export META_AUTHOR="SashaPlayXD (SPXD)"
           export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST. Experimental."
           ./build_turnip.sh
 

@@ -203,7 +203,7 @@ EOF
   "schemaVersion": 1,
   "name": "${_meta_name}",
   "description": "${_meta_desc}",
-  "author": "The412Banner",
+  "author": "${META_AUTHOR:-The412Banner}",
   "packageVersion": "1",
   "vendor": "Mesa",
   "driverVersion": "${_driver_version}",
