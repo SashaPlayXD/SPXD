@@ -7,6 +7,9 @@ on:
         description: "Mesa commit to build"
         default: "19a135296672f24ec1699ada244d5b80ced371da"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,3 +42,28 @@ jobs:
           name: turnip-a8xx-cp-split-r${{ github.run_number }}
           path: turnip_workdir/mesa-turnip-*.zip
           if-no-files-found: error
+
+      - name: Verify the workaround is in the driver
+        run: |
+          set -e
+          Z=$(ls turnip_workdir/mesa-turnip-*.zip | head -1)
+          rm -rf verify && mkdir verify && unzip -q "$Z" -d verify
+          strings -n 6 verify/libvulkan_freedreno.so > verify/strings.txt
+          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_DIAGNOSTIC_SPLIT_INDEXED TU_DIAGNOSTIC_INDEXED_CHUNK "Indexed draw split"; do
+            grep -q "$s" verify/strings.txt || { echo "::error::missing '$s' in driver"; exit 1; }
+            echo "found: $s"
+          done
+          { echo "run: ${{ github.run_number }}"; echo "mesa: $(git -C turnip_workdir/mesa rev-parse HEAD)";
+            git -C turnip_workdir/mesa log -1 --format='%cd %s'; grep -m1 'Mesa 27' verify/strings.txt;
+            sha256sum "$Z"; cat verify/meta.json; } > verify/build-info.txt
+          cat verify/build-info.txt
+
+      - name: Publish driver to a branch
+        run: |
+          set -e
+          B="build-r${{ github.run_number }}"
+          mkdir -p /tmp/pub && cp turnip_workdir/mesa-turnip-*.zip verify/build-info.txt /tmp/pub/
+          cd /tmp/pub && git init -q && git checkout -q -b "$B"
+          git config user.name "github-actions[bot]"; git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Driver build ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$B"
