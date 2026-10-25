@@ -1,0 +1,7 @@
+run: 7 (wayland)
+999d985344d835e63a5a18e2fbc3f396ad1facf9200a7baace09445e06921f0d  wayland_workdir/SPXD-Turnip-v27-A8xx-r7-Wayland.zip
+wverify/libdrm.so
+wverify/meta.json
+wverify/strings.txt
+wverify/libvulkan_freedreno.so
+wverify/build-info.txt
