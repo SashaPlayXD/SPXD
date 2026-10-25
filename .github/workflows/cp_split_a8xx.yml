@@ -34,7 +34,7 @@ jobs:
           export CP_PATCH="patches/cp_split_indexed.patch"
           export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
           export META_AUTHOR="SashaPlayXD (SPXD)"
-          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental."
+          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series 0001-0006 incl. the A8xx IB-storage cache) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_KGSL_IB_CACHE, TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental."
           ./build_turnip.sh
 
       - name: Upload driver
@@ -50,7 +50,7 @@ jobs:
           Z=$(ls turnip_workdir/mesa-turnip-*.zip | head -1)
           rm -rf verify && mkdir verify && unzip -q "$Z" -d verify
           strings -n 6 verify/libvulkan_freedreno.so > verify/strings.txt
-          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_DIAGNOSTIC_SPLIT_INDEXED TU_DIAGNOSTIC_INDEXED_CHUNK TU_SPLIT_SYNC TU_SPLIT_SYNC_EVERY TU_SYNC_RP_CACHE "Indexed draw split"; do
+          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_DIAGNOSTIC_SPLIT_INDEXED TU_DIAGNOSTIC_INDEXED_CHUNK TU_SPLIT_SYNC TU_SPLIT_SYNC_EVERY TU_SYNC_RP_CACHE TU_KGSL_IB_CACHE "Indexed draw split"; do
             grep -q "$s" verify/strings.txt || { echo "::error::missing '$s' in driver"; exit 1; }
             echo "found: $s"
           done
@@ -69,7 +69,9 @@ jobs:
           git add -A && git commit -qm "Driver build ${{ github.run_number }}"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$B"
 
-  wayland:
+  # WinNative's own Linux driver format (Settings -> Drivers -> Linux tab), used when the container's
+  # display server is Wayland. glibc, Arch Linux ARM sysroot; same Mesa and patches as the Android job.
+  linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -79,46 +81,52 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build unzip flex bison glslang-tools curl ccache pkg-config \
-            clang lld llvm python3-pip zip patch binutils
-          pip3 install --break-system-packages meson mako pyyaml packaging
+          sudo apt-get install -y ninja-build unzip flex bison cmake glslang-tools curl pkg-config \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            python3-pip zip patch tar zstd xz-utils
+          pip3 install --break-system-packages 'meson>=1.5' mako pyyaml packaging
 
-      - name: Build (Wayland)
+      - name: Build (WinNative Linux)
         env:
           MESA_COMMIT: ${{ inputs.mesa_commit }}
-          ZIP_NAME: SPXD-Turnip-v27-A8xx-r${{ github.run_number }}-Wayland.zip
-          META_NAME: SPXD Turnip v27 A8xx r${{ github.run_number }} Wayland
-          PACKAGE_VERSION: ${{ github.run_number }}
-          META_DESC: "SPXD Wayland build (Bannerlator Wayland containers): Banner's A8xx Turnip + Cyberpunk 2077 indexed-draw hang workaround. Experimental."
+          ZIP_NAME: SPXD-Turnip-v27-A8xx-r${{ github.run_number }}-Linux.zip
+          META_NAME: SPXD Turnip v27 A8xx r${{ github.run_number }} Linux
+          META_AUTHOR: SashaPlayXD (SPXD)
+          META_DESC: "SPXD Linux (glibc) build for WinNative's Wayland display server: Banner's A8xx Turnip + WinNative 0001-0006 + Cyberpunk 2077 indexed-draw hang workaround. Experimental."
+          PACKAGE_VERSION: spxd-r${{ github.run_number }}
+          WN_META: "1"
           EXTRA_PATCH: patches/a8xx_gen8.patch
           EXTRA_SCRIPT: patches/a8xx_shared_mem.py
           CP_PATCH: patches/cp_split_indexed.patch
           VARIANT: a8xx
         run: |
-          ccache -M 2G
-          chmod +x build_turnip_wayland.sh
-          ./build_turnip_wayland.sh
-          ls -la wayland_workdir
+          chmod +x build_turnip_linux.sh
+          ./build_turnip_linux.sh
 
-      - name: Verify the workaround is in the Wayland driver
+      - name: Verify the Linux driver
         run: |
           set -e
-          Z=$(ls wayland_workdir/SPXD-*-Wayland.zip | head -1)
-          rm -rf wverify && mkdir wverify && unzip -q "$Z" -d wverify
-          find wverify -type f | sed 's/^/  /'
-          find wverify -name '*.so*' -type f -exec strings -n 6 {} + > wverify/strings.txt
-          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_SPLIT_SYNC "Indexed draw split"; do
-            grep -q "$s" wverify/strings.txt || { echo "::error::missing '$s'"; exit 1; }
+          Z=$(ls linux_workdir/SPXD-*-Linux.zip | head -1)
+          rm -rf lverify && mkdir lverify && unzip -q "$Z" -d lverify
+          ls -la lverify
+          L=lverify/libvulkan_freedreno.so
+          aarch64-linux-gnu-readelf -h $L | grep -q AArch64 || { echo "::error::not AArch64"; exit 1; }
+          aarch64-linux-gnu-readelf -d $L | grep -q 'libc.so.6' || { echo "::error::not glibc"; exit 1; }
+          strings -n 6 $L > lverify/strings.txt
+          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_SPLIT_SYNC TU_KGSL_IB_CACHE vkCreateWaylandSurfaceKHR vkCreateXcbSurfaceKHR "Indexed draw split"; do
+            grep -q "$s" lverify/strings.txt || { echo "::error::missing '$s'"; exit 1; }
+            echo "found: $s"
           done
-          { echo "run: ${{ github.run_number }} (wayland)"; sha256sum "$Z"; find wverify -type f; } > wverify/build-info.txt
-          cat wverify/build-info.txt
+          python3 -c "import json,hashlib;m=json.load(open('lverify/meta.json'));assert m['platform']=='linux' and m['libc']=='glibc' and m['architecture']=='aarch64';assert m['librarySha256']==hashlib.sha256(open('$L','rb').read()).hexdigest();print('meta ok')"
+          { echo "run: ${{ github.run_number }} (linux)"; sha256sum "$Z"; cat lverify/meta.json; } > lverify/build-info.txt
+          cat lverify/build-info.txt
 
-      - name: Publish Wayland driver to a branch
+      - name: Publish Linux driver to a branch
         run: |
           set -e
-          B="build-r${{ github.run_number }}-wayland"
-          mkdir -p /tmp/pubw && cp wayland_workdir/SPXD-*-Wayland.zip wverify/build-info.txt /tmp/pubw/
-          cd /tmp/pubw && git init -q && git checkout -q -b "$B"
+          B="build-r${{ github.run_number }}-linux"
+          mkdir -p /tmp/publ && cp linux_workdir/SPXD-*-Linux.zip lverify/build-info.txt /tmp/publ/
+          cd /tmp/publ && git init -q && git checkout -q -b "$B"
           git config user.name "github-actions[bot]"; git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git add -A && git commit -qm "Wayland driver build ${{ github.run_number }}"
+          git add -A && git commit -qm "Linux driver build ${{ github.run_number }}"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$B"

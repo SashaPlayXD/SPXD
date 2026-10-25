@@ -272,6 +272,14 @@ apply_recipe(){
 			|| die "freedreno_devices.py does not parse after the scripts"
 	fi
 
+	# Cyberpunk 2077 A8xx hang workaround (split large indexed draws), as the Android leg applies it.
+	if [ -n "$CP_PATCH" ]; then
+		[ -f "$repo/$CP_PATCH" ] || die "CP_PATCH $CP_PATCH does not exist"
+		log "applying $CP_PATCH"
+		git apply "$repo/$CP_PATCH" || die "$CP_PATCH did not apply"
+		grep -q "tu_can_split_indexed_draw" src/freedreno/vulkan/tu_cmd_buffer.cc || die "$CP_PATCH not in tree"
+	fi
+
 	echo "[linux ${VARIANT}] recipe changes on top of the Linux patches:"
 	git --no-pager diff --stat banner-linux
 }
@@ -414,9 +422,45 @@ with open(os.path.join(os.environ["STAGE"], "meta.json"), "w") as f:
     f.write("\n")
 print(json.dumps(meta, indent=2))
 PY
+	# WN_META=1: WinNative's Linux driver format (Settings -> Drivers -> Linux, used by the
+	# Wayland / GameScope display server). Its installer wants platform/architecture/libc, the
+	# library name and the library's SHA-256, and a flat zip of meta.json + the library.
+	if [ "${WN_META:-0}" = 1 ]; then
+		STAGE="$stage" M_NAME="$META_NAME" M_DESC="${META_DESC:-$desc}" M_DRV="$driver_version" M_PKGVER="$PACKAGE_VERSION" \
+		M_AUTHOR="${META_AUTHOR:-The412Banner}" M_COMMIT="$MESA_COMMIT" M_VERSION="$(tr -d '[:space:]' < VERSION)" \
+		M_GLIBC="$glibc_min" python3 - <<'PY'
+import hashlib, json, os
+st = os.environ["STAGE"]
+lib = os.path.join(st, "libvulkan_freedreno.so")
+meta = {
+    "schemaVersion": 1,
+    "name": os.environ["M_NAME"],
+    "description": os.environ["M_DESC"],
+    "author": os.environ["M_AUTHOR"],
+    "platform": "linux",
+    "architecture": "aarch64",
+    "libc": "glibc",
+    "driverVersion": os.environ["M_PKGVER"],
+    "libraryName": "libvulkan_freedreno.so",
+    "variant": "spxd",
+    "mesaVersion": os.environ["M_VERSION"],
+    "mesaCommit": os.environ["M_COMMIT"],
+    "mesaSource": "https://gitlab.freedesktop.org/mesa/mesa",
+    "minGlibc": os.environ["M_GLIBC"],
+    "librarySha256": hashlib.sha256(open(lib, "rb").read()).hexdigest(),
+}
+with open(os.path.join(st, "meta.json"), "w") as f:
+    json.dump(meta, f, indent=2)
+    f.write("\n")
+print(json.dumps(meta, indent=2))
+PY
+		rm -f "$workdir/$ZIP_NAME"
+		(cd "$stage" && zip -q -X -9 "$workdir/$ZIP_NAME" meta.json libvulkan_freedreno.so) || die "zip failed"
+	else
 	rm -f "$workdir/$ZIP_NAME"
 	(cd "$stage" && zip -q -X "$workdir/$ZIP_NAME" libvulkan_freedreno.so freedreno_icd.aarch64.json meta.json) \
 		|| die "zip failed"
+	fi
 
 	# Facts the release body is written from (verify_driver_zip.py adds the checks).
 	R_OUT="$workdir/build-report.json" R_PKGS="$workdir/sysroot-packages.txt" R_KGSL="$kgsl_assert" \

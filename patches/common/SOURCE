@@ -18,7 +18,7 @@ kgsl-syncobj-merge-ts-fd.patch (DroidDeck, 2026-09-26) - DROPPED 2026-10-10: Mes
   Device-proven on the Linux leg (Cemu SM3DW/Deus Ex/Wipeout 3; RPCS3, Dolphin,
   Steam unchanged).
 
-A8XX DRIVER ONLY (since 2026-09-30, after r7): ../a8xx-winnative/0001-0005 are applied by
+A8XX DRIVER ONLY (since 2026-09-30, after r7): ../a8xx-winnative/0001-0006 are applied by
 apply_common.sh only when EXTRA_PATCH is the gen8 stack. 0001 (mesh) and 0002 (wave32) also switch
 on for A7xx (0002 for A6xx gen4 too: has_getfiberid), where they can steer DX12 games onto
 emulated paths (compute mesh + forced sysmem, half-wave subgroups); a user felt A7xx slower on
@@ -47,6 +47,10 @@ a8xx-winnative/0001-0006 (Max / MaxsTechReview, WinNative-Emu/Drivers linux/patc
   - 0006 IB cache: DROPPED 2026-10-06, following Max (Droid-Deck/Drivers 27bf2ac, 2026-10-01):
     "The IB cache (0006) broke the Linux driver on some Adreno 840 devices; without it they work
     again." IB storage is freed again after use (0005's unbind-before-free still applies).
+    RE-ADDED in SPXD 2026-10-25 (SPXD r8, A830 / S25 Ultra test): Cyberpunk 2077 GPU loss on A830
+    shows the same KGSL EDEADLK signature (wait_timestamp_safe errno 35) that 0006 fixed for FF7
+    Rebirth on A840. On by default; TU_KGSL_IB_CACHE=false turns it off in the same binary. If it
+    breaks a device, that switch is the first thing to try; drop it again if A830 shows no gain.
   All six verified 2026-09-30 on Mesa 4da08cb for every leg's recipe (Standard, A8xx + gen8 stack,
   710-720, 8G2 One UI; Android, Wayland pre-steps, Linux pre-patches): zero rejects, zero fuzz.
   When Mesa moves and one stops applying, rebase it here (or pull Max's rebase) - never drop it
