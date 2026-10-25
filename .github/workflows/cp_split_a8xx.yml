@@ -105,8 +105,8 @@ jobs:
           set -e
           Z=$(ls wayland_workdir/SPXD-*-Wayland.zip | head -1)
           rm -rf wverify && mkdir wverify && unzip -q "$Z" -d wverify
-          SO=$(find wverify -name '*.so' | head -1)
-          strings -n 6 "$SO" > wverify/strings.txt
+          find wverify -type f | sed 's/^/  /'
+          find wverify -name '*.so*' -type f -exec strings -n 6 {} + > wverify/strings.txt
           for s in tu_split_indexed_draws Cyberpunk2077.exe TU_SPLIT_SYNC "Indexed draw split"; do
             grep -q "$s" wverify/strings.txt || { echo "::error::missing '$s'"; exit 1; }
           done
