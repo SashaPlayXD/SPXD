@@ -13,7 +13,7 @@ index da85f994..6de517f8 100644
      </device>
  </driconf>
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index 6fdee49a..a9d1b0c8 100644
+index 6fdee49a..67374b84 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
 @@ -3359,6 +3359,18 @@ tu7_emit_concurrent_binning_sysmem(struct tu_cmd_buffer *cmd,
@@ -88,8 +88,8 @@ index 6fdee49a..a9d1b0c8 100644
 +}
 +
 +/* Synchronization emitted after a chunk of a split indexed draw.
-+ * TU_SPLIT_SYNC selects the packet (wfi = CP_WAIT_FOR_IDLE, the default and
-+ * what Rutabaga does; me = CP_WAIT_FOR_ME; none = nothing) and
++ * TU_SPLIT_SYNC selects the packet (wfi = CP_WAIT_FOR_IDLE, what Rutabaga
++ * does; me = CP_WAIT_FOR_ME, the Cyberpunk 2077 default; none = nothing) and
 + * TU_SPLIT_SYNC_EVERY emits it only after every Nth chunk. The last chunk of
 + * a draw always gets it when TU_SPLIT_SYNC_LAST is set (default on).
 + */
@@ -139,10 +139,10 @@ index 6fdee49a..a9d1b0c8 100644
     tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
     tu_cs_emit(cs, instanceCount);
 diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
-index 57f33fbd..5ff1af67 100644
+index 57f33fbd..073b7313 100644
 --- a/src/freedreno/vulkan/tu_device.cc
 +++ b/src/freedreno/vulkan/tu_device.cc
-@@ -2994,6 +2994,46 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -2994,6 +2994,52 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
  
     device->instance = physical_device->instance;
     device->physical_device = physical_device;
@@ -164,8 +164,14 @@ index 57f33fbd..5ff1af67 100644
 +      device->split_indexed_chunk = (uint32_t) chunk;
 +
 +      const char *sync = os_get_option("TU_SPLIT_SYNC");
-+      device->split_sync_mode = TU_SPLIT_SYNC_WFI;
-+      if (sync && !strcmp(sync, "me"))
++      /* Cyberpunk 2077 (the driconf default) was tested stable with the
++       * lighter CP_WAIT_FOR_ME between chunks; everything else keeps the
++       * full CP_WAIT_FOR_IDLE.
++       */
++      device->split_sync_mode = app_default ? TU_SPLIT_SYNC_ME : TU_SPLIT_SYNC_WFI;
++      if (sync && !strcmp(sync, "wfi"))
++         device->split_sync_mode = TU_SPLIT_SYNC_WFI;
++      else if (sync && !strcmp(sync, "me"))
 +         device->split_sync_mode = TU_SPLIT_SYNC_ME;
 +      else if (sync && !strcmp(sync, "none"))
 +         device->split_sync_mode = TU_SPLIT_SYNC_NONE;
