@@ -34,7 +34,7 @@ jobs:
           export CP_PATCH="patches/cp_split_indexed.patch"
           export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
           export META_AUTHOR="SashaPlayXD (SPXD)"
-          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (Cyberpunk default me; wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental."
+          export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental."
           ./build_turnip.sh
 
       - name: Upload driver
@@ -67,4 +67,58 @@ jobs:
           cd /tmp/pub && git init -q && git checkout -q -b "$B"
           git config user.name "github-actions[bot]"; git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           git add -A && git commit -qm "Driver build ${{ github.run_number }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$B"
+
+  wayland:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build unzip flex bison glslang-tools curl ccache pkg-config \
+            clang lld llvm python3-pip zip patch binutils
+          pip3 install --break-system-packages meson mako pyyaml packaging
+
+      - name: Build (Wayland)
+        env:
+          MESA_COMMIT: ${{ inputs.mesa_commit }}
+          ZIP_NAME: SPXD-Turnip-v27-A8xx-r${{ github.run_number }}-Wayland.zip
+          META_NAME: SPXD Turnip v27 A8xx r${{ github.run_number }} Wayland
+          PACKAGE_VERSION: ${{ github.run_number }}
+          META_DESC: "SPXD Wayland build (Bannerlator Wayland containers): Banner's A8xx Turnip + Cyberpunk 2077 indexed-draw hang workaround. Experimental."
+          EXTRA_PATCH: patches/a8xx_gen8.patch
+          EXTRA_SCRIPT: patches/a8xx_shared_mem.py
+          CP_PATCH: patches/cp_split_indexed.patch
+          VARIANT: a8xx
+        run: |
+          ccache -M 2G
+          chmod +x build_turnip_wayland.sh
+          ./build_turnip_wayland.sh
+          ls -la wayland_workdir
+
+      - name: Verify the workaround is in the Wayland driver
+        run: |
+          set -e
+          Z=$(ls wayland_workdir/SPXD-*-Wayland.zip | head -1)
+          rm -rf wverify && mkdir wverify && unzip -q "$Z" -d wverify
+          SO=$(find wverify -name '*.so' | head -1)
+          strings -n 6 "$SO" > wverify/strings.txt
+          for s in tu_split_indexed_draws Cyberpunk2077.exe TU_SPLIT_SYNC "Indexed draw split"; do
+            grep -q "$s" wverify/strings.txt || { echo "::error::missing '$s'"; exit 1; }
+          done
+          { echo "run: ${{ github.run_number }} (wayland)"; sha256sum "$Z"; find wverify -type f; } > wverify/build-info.txt
+          cat wverify/build-info.txt
+
+      - name: Publish Wayland driver to a branch
+        run: |
+          set -e
+          B="build-r${{ github.run_number }}-wayland"
+          mkdir -p /tmp/pubw && cp wayland_workdir/SPXD-*-Wayland.zip wverify/build-info.txt /tmp/pubw/
+          cd /tmp/pubw && git init -q && git checkout -q -b "$B"
+          git config user.name "github-actions[bot]"; git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Wayland driver build ${{ github.run_number }}"
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" "$B"

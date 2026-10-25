@@ -180,6 +180,14 @@ apply_recipe(){
 			|| die "freedreno_devices.py does not parse after the scripts"
 	fi
 
+	# SPXD: optional Cyberpunk 2077 A8xx split patch, as build_turnip.sh's CP_PATCH.
+	if [ -n "$CP_PATCH" ]; then
+		[ -f "$repo/$CP_PATCH" ] || die "CP_PATCH $CP_PATCH does not exist"
+		log "applying $CP_PATCH"
+		git apply "$repo/$CP_PATCH" || die "$CP_PATCH did not apply"
+		grep -q "tu_can_split_indexed_draw" src/freedreno/vulkan/tu_cmd_buffer.cc || die "$CP_PATCH is missing from tu_cmd_buffer.cc"
+	fi
+
 	# build_turnip.sh's NDK r29 seds (Android-only files; kept so the recipe is the same).
 	sed -i 's/typedef const native_handle_t\* buffer_handle_t;/typedef void\* buffer_handle_t;/g' include/android_stub/cutils/native_handle.h || true
 	sed -i 's/, hnd->handle/, (void \*)hnd->handle/g' src/util/u_gralloc/u_gralloc_fallback.c || true
