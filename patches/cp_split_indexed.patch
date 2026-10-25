@@ -1,5 +1,5 @@
 diff --git a/src/freedreno/vulkan/00-turnip-defaults.conf b/src/freedreno/vulkan/00-turnip-defaults.conf
-index da85f99..6de517f 100644
+index da85f994..6de517f8 100644
 --- a/src/freedreno/vulkan/00-turnip-defaults.conf
 +++ b/src/freedreno/vulkan/00-turnip-defaults.conf
 @@ -156,5 +156,9 @@
@@ -13,10 +13,45 @@ index da85f99..6de517f 100644
      </device>
  </driconf>
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index 6fdee49..24502fe 100644
+index 6fdee49a..a9d1b0c8 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -9348,6 +9348,60 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
+@@ -3359,6 +3359,18 @@ tu7_emit_concurrent_binning_sysmem(struct tu_cmd_buffer *cmd,
+    util_dynarray_append(&cmd->cb_control_points, disable_no_cb_patch);
+ }
+ 
++/* Optional A8xx workaround (TU_SYNC_RP_CACHE): clean UCHE and wait for idle
++ * before the CCU is set up for a render pass, instead of splitting draws.
++ */
++template <chip CHIP>
++static inline void
++tu_sync_rp_cache(struct tu_cmd_buffer *cmd)
++{
++   if (CHIP >= A8XX && unlikely(cmd->device->sync_rp_cache))
++      cmd->state.cache.flush_bits |=
++         TU_CMD_FLAG_CACHE_CLEAN | TU_CMD_FLAG_WAIT_FOR_IDLE;
++}
++
+ template <chip CHIP>
+ static void
+ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+@@ -3401,6 +3413,7 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+    tu_cs_emit_pkt7(cs, CP_SKIP_IB2_ENABLE_GLOBAL, 1);
+    tu_cs_emit(cs, 0x0);
+ 
++   tu_sync_rp_cache<CHIP>(cmd);
+    tu_emit_cache_flush_ccu<CHIP>(cmd, cs, TU_CMD_CCU_SYSMEM);
+ 
+    tu_cs_emit_pkt7(cs, CP_SET_VISIBILITY_OVERRIDE, 1);
+@@ -3630,6 +3643,7 @@ tu6_tile_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+    cmd->device->autotune->init_renderpass(rp_ctx, false, tile_count);
+ 
+    /* User flushes should always be executed on BR. */
++   tu_sync_rp_cache<CHIP>(cmd);
+    tu_emit_cache_flush_ccu<CHIP>(cmd, cs, TU_CMD_CCU_GMEM);
+ 
+    bool use_cb = false;
+@@ -9348,6 +9362,60 @@ tu_CmdDrawMultiEXT(VkCommandBuffer commandBuffer,
  }
  TU_GENX(tu_CmdDrawMultiEXT);
  
@@ -77,7 +112,7 @@ index 6fdee49..24502fe 100644
  template <chip CHIP>
  VKAPI_ATTR void VKAPI_CALL
  tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
-@@ -9364,6 +9418,25 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
+@@ -9364,6 +9432,25 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
  
     tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
  
@@ -104,10 +139,10 @@ index 6fdee49..24502fe 100644
     tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
     tu_cs_emit(cs, instanceCount);
 diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
-index 57f33fb..fefabfe 100644
+index 57f33fbd..5ff1af67 100644
 --- a/src/freedreno/vulkan/tu_device.cc
 +++ b/src/freedreno/vulkan/tu_device.cc
-@@ -2994,6 +2994,42 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+@@ -2994,6 +2994,46 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
  
     device->instance = physical_device->instance;
     device->physical_device = physical_device;
@@ -137,6 +172,10 @@ index 57f33fb..fefabfe 100644
 +      int64_t every = debug_get_num_option("TU_SPLIT_SYNC_EVERY", 1);
 +      device->split_sync_every = (uint32_t) CLAMP(every, 1, 64);
 +      device->split_sync_last = debug_get_bool_option("TU_SPLIT_SYNC_LAST", true);
++      device->sync_rp_cache = physical_device->info->chip >= 8 &&
++         debug_get_bool_option("TU_SYNC_RP_CACHE", false);
++      if (device->sync_rp_cache)
++         mesa_logi("Render-pass UCHE clean + WFI before CCU setup: enabled");
 +
 +      if (device->split_indexed_draws)
 +         mesa_logi("Indexed draw split: enabled, chunk=%u, sync=%s every %u%s, application default=%s",
@@ -151,10 +190,10 @@ index 57f33fb..fefabfe 100644
  
     result = tu_drm_device_init(device);
 diff --git a/src/freedreno/vulkan/tu_device.h b/src/freedreno/vulkan/tu_device.h
-index 3e1211a..ee265da 100644
+index 3e1211a2..6898a84d 100644
 --- a/src/freedreno/vulkan/tu_device.h
 +++ b/src/freedreno/vulkan/tu_device.h
-@@ -309,11 +309,24 @@ struct tu_pvtmem_bo {
+@@ -309,11 +309,25 @@ struct tu_pvtmem_bo {
  
  struct tu_virtio_device;
  
@@ -175,12 +214,13 @@ index 3e1211a..ee265da 100644
 +   uint8_t split_sync_mode; /* enum tu_split_sync_mode */
 +   bool split_sync_last;
 +   uint32_t split_sync_every;
++   bool sync_rp_cache; /* TU_SYNC_RP_CACHE, A8xx only */
 +
     struct tu_queue *queues[TU_MAX_QUEUE_FAMILIES];
     int queue_count[TU_MAX_QUEUE_FAMILIES];
  
 diff --git a/src/freedreno/vulkan/tu_drirc_gen.py b/src/freedreno/vulkan/tu_drirc_gen.py
-index b46cc2f..73782e0 100644
+index b46cc2f0..73782e03 100644
 --- a/src/freedreno/vulkan/tu_drirc_gen.py
 +++ b/src/freedreno/vulkan/tu_drirc_gen.py
 @@ -123,6 +123,15 @@ def declare_options():
