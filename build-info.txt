@@ -1,0 +1,19 @@
+run: 10 (linux)
+b1c0740135e2dd22ef5359a22faafb51a981372ea6abb9e783f4c68e5f96c1c8  linux_workdir/SPXD-Turnip-v27-A8xx-r10-Linux.zip
+{
+  "schemaVersion": 1,
+  "name": "SPXD Turnip v27 A8xx r10 Linux wave64",
+  "description": "SPXD Linux (glibc) build for WinNative's Wayland display server: Banner's A8xx Turnip + WinNative 0001-0006 + Cyberpunk 2077 indexed-draw hang workaround. Experimental. A830 experiment: no wave128 (supports_double_threadsize = False, as upstream).",
+  "author": "SashaPlayXD (SPXD)",
+  "platform": "linux",
+  "architecture": "aarch64",
+  "libc": "glibc",
+  "driverVersion": "spxd-r10",
+  "libraryName": "libvulkan_freedreno.so",
+  "variant": "spxd",
+  "mesaVersion": "27.0.0-devel",
+  "mesaCommit": "c515ec0fe77da9f42f390e442379f2d0629d908c",
+  "mesaSource": "https://gitlab.freedesktop.org/mesa/mesa",
+  "minGlibc": "2.38",
+  "librarySha256": "f3d34143fe60792f9c482579fe67626c61da15983a341fdd048f99b7b8165ea9"
+}
