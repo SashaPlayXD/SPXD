@@ -6,6 +6,10 @@ on:
       mesa_commit:
         description: "Mesa commit to build"
         default: "c515ec0fe77da9f42f390e442379f2d0629d908c"
+      a830_wave64:
+        description: "Experiment: Adreno 830 without wave128 (supports_double_threadsize = False, as upstream eb43e95)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,6 +39,11 @@ jobs:
           export META_NAME="SPXD Turnip v27 A8xx r${{ github.run_number }}"
           export META_AUTHOR="SashaPlayXD (SPXD)"
           export META_DESC="SPXD: Banner's A8xx Turnip (Mesa ${MESA_COMMIT:0:10} + whitebelyash gen8 + WinNative series 0001-0006 incl. the A8xx IB-storage cache) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_KGSL_IB_CACHE, TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental."
+          if [ "${{ inputs.a830_wave64 }}" = "true" ]; then
+            EXTRA_SCRIPT="$EXTRA_SCRIPT:patches/a830_wave64.py"
+            META_NAME="$META_NAME wave64"
+            META_DESC="$META_DESC A830 experiment: no wave128 (supports_double_threadsize = False, as upstream)."
+          fi
           ./build_turnip.sh
 
       - name: Upload driver
@@ -54,8 +63,12 @@ jobs:
             grep -q "$s" verify/strings.txt || { echo "::error::missing '$s' in driver"; exit 1; }
             echo "found: $s"
           done
+          if [ "${{ inputs.a830_wave64 }}" = "true" ]; then want=False; else want=True; fi
+          python3 patches/check_dev_info.py turnip_workdir/mesa/build-android-aarch64/src/freedreno/common/freedreno_devices.h \
+            0x44050001 supports_double_threadsize $want > verify/dev-info.txt
+          cat verify/dev-info.txt
           { echo "run: ${{ github.run_number }}"; echo "mesa: $(git -C turnip_workdir/mesa rev-parse HEAD)";
-            git -C turnip_workdir/mesa log -1 --format='%cd %s'; grep -m1 'Mesa 27' verify/strings.txt;
+            git -C turnip_workdir/mesa log -1 --format='%cd %s'; grep -m1 'Mesa 27' verify/strings.txt; cat verify/dev-info.txt;
             sha256sum "$Z"; cat verify/meta.json; } > verify/build-info.txt
           cat verify/build-info.txt
 
@@ -101,6 +114,11 @@ jobs:
           VARIANT: a8xx
         run: |
           chmod +x build_turnip_linux.sh
+          if [ "${{ inputs.a830_wave64 }}" = "true" ]; then
+            export EXTRA_SCRIPT="$EXTRA_SCRIPT:patches/a830_wave64.py"
+            export META_NAME="$META_NAME wave64"
+            export META_DESC="$META_DESC A830 experiment: no wave128 (supports_double_threadsize = False, as upstream)."
+          fi
           ./build_turnip_linux.sh
 
       - name: Verify the Linux driver
@@ -117,6 +135,9 @@ jobs:
             grep -q "$s" lverify/strings.txt || { echo "::error::missing '$s'"; exit 1; }
             echo "found: $s"
           done
+          if [ "${{ inputs.a830_wave64 }}" = "true" ]; then want=False; else want=True; fi
+          python3 patches/check_dev_info.py linux_workdir/mesa/build-linux/src/freedreno/common/freedreno_devices.h \
+            0x44050001 supports_double_threadsize $want
           python3 -c "import json,hashlib;m=json.load(open('lverify/meta.json'));assert m['platform']=='linux' and m['libc']=='glibc' and m['architecture']=='aarch64';assert m['librarySha256']==hashlib.sha256(open('$L','rb').read()).hexdigest();print('meta ok')"
           { echo "run: ${{ github.run_number }} (linux)"; sha256sum "$Z"; cat lverify/meta.json; } > lverify/build-info.txt
           cat lverify/build-info.txt
