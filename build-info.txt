@@ -1,0 +1,17 @@
+run: 10
+mesa: c515ec0fe77da9f42f390e442379f2d0629d908c
+Sat Oct 24 09:13:52 2026 -0300 docs: update the list of drivers in the u_trace docs
+Mesa 27.0.0-devel (git-c515ec0fe7)
+check_dev_info.py: Adreno (TM) 830 (0x44050001, __info31): supports_double_threadsize=False
+ba288c1ab9a88a2c915c91bbd66dd8835d600b4ed63724d9abb46fd07e47037d  turnip_workdir/mesa-turnip-main-V10.zip
+{
+  "schemaVersion": 1,
+  "name": "SPXD Turnip v27 A8xx r10 wave64",
+  "description": "SPXD: Banner's A8xx Turnip (Mesa c515ec0fe7 + whitebelyash gen8 + WinNative series 0001-0006 incl. the A8xx IB-storage cache) with the Cyberpunk 2077 indexed-draw hang workaround (tu_split_indexed_draws). Vars: TU_KGSL_IB_CACHE, TU_DIAGNOSTIC_SPLIT_INDEXED, TU_DIAGNOSTIC_INDEXED_CHUNK, TU_SPLIT_SYNC (wfi|me|none), TU_SPLIT_SYNC_EVERY, TU_SPLIT_SYNC_LAST, TU_SYNC_RP_CACHE. Experimental. A830 experiment: no wave128 (supports_double_threadsize = False, as upstream).",
+  "author": "SashaPlayXD (SPXD)",
+  "packageVersion": "1",
+  "vendor": "Mesa",
+  "driverVersion": "Vulkan 1.4.363",
+  "minApi": 28,
+  "libraryName": "libvulkan_freedreno.so"
+}
