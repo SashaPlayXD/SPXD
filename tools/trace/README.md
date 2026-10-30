@@ -26,6 +26,21 @@ render passes, compute shaders, blits and LRZ-off reasons that cost the
 most. `--compare` puts a second trace beside the first (same save, other
 build); `--anatomy` lists one median frame in GPU order.
 
+Recording costs a noticeable share of FPS, so take benchmark numbers with
+the two variables removed.
+
+Under WinNative the trace's frame column stays 0, because frames are
+presented outside Turnip. The script then counts frames by vkd3d-proton's
+present blit (the most common single-draw, single-attachment command buffer,
+or the size given with `--present 1300x600`). That blit does the same work
+every frame, so its duration, the "blit us" column of the timeline, tracks
+the GPU clock: about 87 us at full clock on the S25 Ultra, 460 us in menus,
+170-190 us when the phone throttles.
+
+To tell builds apart from the trace alone: a compute shader's `cs_sha1`
+covers its wave size too, so shaders that r4 ran as wave128 carry different
+hashes under r10 wave64.
+
 ## Android system trace: `systrace_summary.py`
 
 Record with Developer options -> System Tracing (CPU Scheduling and CPU

@@ -3,7 +3,7 @@
 Summarize a Turnip GPU timeline recorded with MESA_GPU_TRACES=print_csv.
 
 usage: gpu_trace_summary.py TRACE [--compare TRACE2] [--frames A-B] [--ctx N]
-                            [--top N] [--anatomy]
+                            [--top N] [--anatomy] [--present WxH]
 
 TRACE is the file MESA_GPU_TRACEFILE named: .csv, or .csv.gz when the name
 ends in .gz. A gzip stream cut short (the game was killed before exit) is
@@ -27,6 +27,15 @@ the top shows what is where.
 
 --compare prints the same numbers for a second trace beside the first, for
 example r4 against r10 wave64 recorded at the same save.
+
+Under WinNative the frame column stays 0: frames are presented outside
+Turnip, so u_trace never sees the end of one. Frames are then numbered by
+vkd3d-proton's present blit instead, a command buffer holding nothing but one
+single-draw render pass into one colour attachment; the most common size of
+those is taken as the swapchain, or --present names it (e.g. 1300x600). The
+blit does the same work every frame, so its duration (the "blit us" column)
+shows how fast the GPU is clocked: it grows when the phone throttles, and in
+menus or under an FPS cap, where the governor clocks the GPU down.
 
 Without MESA_GPU_TRACES' "indirects" flag, lrzStatus and the indirect
 dispatch sizes are placeholders and are not used.
@@ -86,10 +95,12 @@ class Frame:
     __slots__ = ('nr', 'first_ts', 'cb_ns', 'cb_spans', 'n_rp', 'n_disp',
                  'cat_ns', 'rp_ns', 'rp_n', 'rp_draws', 'rp_gmem',
                  'cs_ns', 'cs_n', 'cs_groups', 'tr_ns', 'tr_n', 'ann_ns',
-                 'in_rp_ns', 'lrz_off_ns', 'lrzw_off_ns', 'mode_reason_n')
+                 'in_rp_ns', 'lrz_off_ns', 'lrzw_off_ns', 'mode_reason_n',
+                 'present_ns')
 
     def __init__(self, nr):
         self.nr = nr
+        self.present_ns = None
         self.first_ts = None
         self.cb_ns = 0
         self.cb_spans = []
@@ -135,7 +146,64 @@ def groups_of(a):
         return 0
 
 
-def load(path, want_ctx=None):
+class PresentBlits:
+    """Spots vkd3d-proton's present blit: a command buffer holding one
+    single-draw render pass into one colour attachment and nothing else."""
+
+    def __init__(self):
+        self.cb = None  # [start ts, render passes, dispatches, size, draws]
+
+    def feed(self, ts, name, payload):
+        """Returns (size, duration) when name ends a present blit."""
+        cb = self.cb
+        if name == 'start_cmd_buffer':
+            self.cb = [ts, 0, 0, None, None]
+        elif cb is None:
+            pass
+        elif name == 'start_render_pass':
+            cb[1] += 1
+            a = parse_kv(payload)
+            if a.get('attachment_count') == '1' and a.get('hasDepth') != 'true':
+                cb[3] = f"{a.get('width')}x{a.get('height')}"
+        elif name == 'end_render_pass':
+            cb[4] = parse_kv(payload).get('drawCount')
+        elif name.startswith('start_compute'):
+            cb[2] += 1
+        elif name == 'end_cmd_buffer':
+            self.cb = None
+            if cb[1] == 1 and cb[2] == 0 and cb[3] and cb[4] == '1':
+                return cb[3], ts - cb[0]
+        return None
+
+
+def number_by_present(events, ctx, size=None):
+    """Renumber the frames of ctx in place, one per present blit of the given
+    size (default: the most common). Returns (size, {frame: blit ns})."""
+    pb = PresentBlits()
+    found = []  # (event index, size, ns)
+    for i, (c, _, ts, name, payload) in enumerate(events):
+        if c == ctx:
+            hit = pb.feed(ts, name, payload)
+            if hit:
+                found.append((i, hit[0], hit[1]))
+    if not found:
+        return None, {}
+    if size is None:
+        size = collections.Counter(s for _, s, _ in found).most_common(1)[0][0]
+    ends = {i: ns for i, s, ns in found if s == size}
+    blit = {}
+    nr = 0
+    for i, (c, _, ts, name, payload) in enumerate(events):
+        if c != ctx:
+            continue
+        events[i] = (c, nr, ts, name, payload)
+        if i in ends:
+            blit[nr] = ends[i]
+            nr += 1
+    return size, blit
+
+
+def load(path, want_ctx=None, present=None):
     """Parse one trace. Returns (frames by nr, ctx event counts, info)."""
     per_ctx_lines = collections.Counter()
     events = []  # (ctx, frame, ts, name, rest) of the chosen context
@@ -166,6 +234,10 @@ def load(path, want_ctx=None):
     if not events:
         sys.exit(f'{path}: no trace events found')
     ctx = want_ctx if want_ctx is not None else per_ctx_lines.most_common(1)[0][0]
+
+    blit = {}
+    if present or len({e[1] for e in events if e[0] == ctx}) == 1:
+        present, blit = number_by_present(events, ctx, present)
 
     frames = {}
     stack = []  # open ranges of this context: [name, ts, args, frame]
@@ -257,8 +329,12 @@ def load(path, want_ctx=None):
             continue
         f.cat_ns['other: ' + base] += dur
 
+    for nr, ns in blit.items():
+        if nr in frames:
+            frames[nr].present_ns = ns
     info = {'ctx': ctx, 'contexts': per_ctx_lines, 'bad': bad,
-            'unmatched': unmatched + len(stack), 'app': app}
+            'unmatched': unmatched + len(stack), 'app': app,
+            'present': present}
     return frames, info
 
 
@@ -309,6 +385,8 @@ class Summary:
         self.interval_ms = statistics.median(gaps) / 1e6 if gaps else None
         self.rp_per_frame = statistics.mean(f.n_rp for f in fs)
         self.disp_per_frame = statistics.mean(f.n_disp for f in fs)
+        blits = [f.present_ns for f in fs if f.present_ns is not None]
+        self.blit_us = statistics.median(blits) / 1e3 if blits else None
         idle_in = 0
         for f in fs:
             spans = sorted(f.cb_spans)
@@ -348,7 +426,7 @@ def timeline(frames, sel_set):
     for n in nrs:
         f = frames[n]
         sec = int((f.first_ts - t0) / 1e9)
-        b = buckets.setdefault(sec, [0, 0, 0.0, 0, n, n, 0])
+        b = buckets.setdefault(sec, [0, 0, 0.0, 0, n, n, 0, []])
         b[0] += 1
         b[1] += f.n_rp
         b[2] += f.cb_ns / 1e6
@@ -356,12 +434,15 @@ def timeline(frames, sel_set):
         b[4] = min(b[4], n)
         b[5] = max(b[5], n)
         b[6] += n in sel_set
+        if f.present_ns is not None:
+            b[7].append(f.present_ns)
     print('\nTimeline (one line per second):')
-    print('   s  frames   frame nr      rp/frame  disp/frame  GPU ms/frame  used')
-    for sec, (cnt, rp, gms, disp, lo, hi, used) in buckets.items():
+    print('   s  frames   frame nr      rp/frame  disp/frame  GPU ms/frame  blit us  used')
+    for sec, (cnt, rp, gms, disp, lo, hi, used, blits) in buckets.items():
         mark = 'all' if used == cnt else (f'{used}' if used else '')
+        blit = f'{statistics.median(blits) / 1e3:7.0f}' if blits else ' ' * 7
         print(f'{sec:4d}  {cnt:6d}  {lo:6d}-{hi:<6d}  {rp / cnt:8.1f}  {disp / cnt:10.1f}'
-              f'  {gms / cnt:12.2f}  {mark}')
+              f'  {gms / cnt:12.2f}  {blit}  {mark}')
 
 
 def fmt_ms(v):
@@ -428,6 +509,9 @@ def report(path, frames, info, sel, how, s, other=None, top=25):
           f"{dict(info['contexts'])} (events per context)")
     if info['bad'] or info['unmatched']:
         print(f"Skipped lines: {info['bad']}, unmatched ranges: {info['unmatched']}")
+    if info['present']:
+        print(f"Frames numbered by the {info['present']} present blit "
+              f"(the trace's own frame column never moves)")
     print(f'Frames used: {sel[0]}-{sel[-1]} ({len(sel)} frames), {how}')
     if other is not None:
         p2, f2, i2, sel2, how2, s2 = other
@@ -442,6 +526,8 @@ def report(path, frames, info, sel, how, s, other=None, top=25):
                      f'GPU busy {statistics.mean(g) / s.interval_ms * 100:.0f}% of it')
         line += (f'\nGPU idle between command buffers inside a frame: {s.idle_in_ms:.2f} ms/frame'
                  f'\nRender passes {s.rp_per_frame:.1f}/frame, dispatches {s.disp_per_frame:.1f}/frame')
+        if s.blit_us:
+            line += f'\nPresent blit (longer = lower GPU clock): median {s.blit_us:.0f} us'
         return line
 
     print('\n[A] ' + frame_block(s).replace('\n', '\n    '))
@@ -478,11 +564,13 @@ def report(path, frames, info, sel, how, s, other=None, top=25):
               None if other is None else rows_simple(s2, s2.ann_ns))
 
 
-def anatomy(path, ctx, frame_nr):
+def anatomy(path, ctx, frame_nr, present=None):
     """Print one frame's top-level ranges in GPU order."""
     print(f'\nFrame {frame_nr} in GPU order (top-level ranges; repeats of the same dispatch merged):')
     stack = []
     rows = []
+    pb = PresentBlits()
+    nr = 0  # frame number when counted by present blits, as load() does
     for line in open_lines(path):
         if not line or line[0] not in '0123456789':
             continue
@@ -494,8 +582,14 @@ def anatomy(path, ctx, frame_nr):
         if i < 0 or int(rest[i + 4:]) != ctx:
             continue
         name, ts, payload = parts[3], int(parts[2]), rest[:i].rstrip(', ')
+        frame = int(parts[0])
+        if present:
+            frame = nr
+            hit = pb.feed(ts, name, payload)
+            if hit and hit[0] == present:
+                nr += 1
         if name.startswith('start_'):
-            stack.append((name[6:], ts, int(parts[0]), payload))
+            stack.append((name[6:], ts, frame, payload))
         elif name.startswith('end_') and stack:
             base = name[4:]
             j = len(stack) - 1
@@ -547,22 +641,25 @@ def main():
     ap.add_argument('--top', type=int, default=25)
     ap.add_argument('--anatomy', action='store_true',
                     help="also list the median frame's ranges in GPU order")
+    ap.add_argument('--present', metavar='WxH',
+                    help='number frames by the present blit of this size '
+                         '(default when the trace has no frame numbers: the most common)')
     args = ap.parse_args()
 
-    frames, info = load(args.trace, args.ctx)
+    frames, info = load(args.trace, args.ctx, args.present)
     sel, how = pick_frames(frames, args.frames)
     timeline(frames, set(sel))
     s = Summary(frames, sel)
     other = None
     if args.compare:
-        f2, i2 = load(args.compare, args.ctx)
+        f2, i2 = load(args.compare, args.ctx, args.present)
         sel2, how2 = pick_frames(f2, args.frames2)
         other = (args.compare, f2, i2, sel2, how2, Summary(f2, sel2))
     print()
     report(args.trace, frames, info, sel, how, s, other, args.top)
     if args.anatomy:
         med = sorted(sel, key=lambda n: frames[n].cb_ns)[len(sel) // 2]
-        anatomy(args.trace, info['ctx'], med)
+        anatomy(args.trace, info['ctx'], med, info['present'])
 
 
 if __name__ == '__main__':
